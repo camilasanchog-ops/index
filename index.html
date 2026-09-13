@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Rocket - viajes</title>
+<title>Destinos de Viaje Compartidos</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -64,6 +64,18 @@
   }
   #estado { color: #666; font-size: 0.9rem; text-align: center; }
   .oculto { display: none; }
+  .resultado {
+    padding: 12px;
+    border-radius: 8px;
+    background: #f9f9fb;
+    margin-bottom: 10px;
+    border-left: 4px solid #ddd;
+  }
+  .resultado.mejor { border-left: 4px solid #34c759; background: #f0fdf4; }
+  .resultado h3 { margin: 0 0 6px 0; }
+  .resultado .precio-linea { font-size: 0.9rem; color: #444; margin: 2px 0; }
+  .resultado .total { font-weight: bold; margin-top: 6px; }
+  #cargando { text-align: center; color: #666; padding: 10px; }
 </style>
 </head>
 <body>
@@ -88,12 +100,21 @@
 
 <div class="card oculto" id="pantalla-destinos">
   <h2>Agregar destino</h2>
-  <input type="text" id="input-ciudad" placeholder="Ciudad o país (ej: Tokio, Japón)">
-  <input type="text" id="input-notas" placeholder="Notas (ej: fechas flexibles, prioridad alta)">
+  <input type="text" id="input-ciudad" placeholder="Ciudad o país (ej: Tokio)">
+  <input type="text" id="input-iata" placeholder="Código de aeropuerto IATA (ej: NRT)" maxlength="3">
+  <input type="text" id="input-notas" placeholder="Notas (opcional)">
   <button id="btn-agregar">Agregar destino</button>
 
   <h2>Destinos (<span id="contador">0</span>/5)</h2>
   <div id="lista-destinos"></div>
+</div>
+
+<div class="card oculto" id="pantalla-precios">
+  <h2>💰 Mejores fechas y precios</h2>
+  <p style="font-size:0.9rem; color:#666;">Compara precios desde Mallorca (PMI) y Nueva York (NYC) hacia cada destino, para el año siguiente.</p>
+  <button id="btn-buscar-precios">Buscar mejores fechas</button>
+  <div id="cargando" class="oculto">Consultando precios, un momento...</div>
+  <div id="resultados-precios"></div>
 </div>
 
 <!-- Firebase SDK (modular, vía CDN) -->
@@ -105,32 +126,34 @@
 
   // === PEGA AQUÍ TU firebaseConfig ===
   const firebaseConfig = {
-  apiKey: "AIzaSyDIGZYg6r0ZdxZd5Wcin_ce84l_nJAi4Ks",
-  authDomain: "vuelos-rocket.firebaseapp.com",
-  projectId: "vuelos-rocket",
-  storageBucket: "vuelos-rocket.firebasestorage.app",
-  messagingSenderId: "150556964009",
-  appId: "1:150556964009:web:8d032db762e0de9d9f65b8",
-  measurementId: "G-423JYMC7KC"
-};
+    apiKey: "AIzaSyDIGZYg6r0ZdxZd5Wcin_ce84l_nJAi4Ks",
+    authDomain: "vuelos-rocket.firebaseapp.com",
+    projectId: "vuelos-rocket",
+    storageBucket: "vuelos-rocket.firebasestorage.app",
+    messagingSenderId: "150556964009",
+    appId: "1:150556964009:web:8d032db762e0de9d9f65b8",
+    measurementId: "G-423JYMC7KC"
+  };
   // ====================================
 
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
 
   let codigoViaje = null;
-  let unsubscribe = null;
+  let destinosActuales = [];
 
   // Referencias a elementos del DOM
   const pantallaInicio = document.getElementById("pantalla-inicio");
   const pantallaApp = document.getElementById("pantalla-app");
   const pantallaDestinos = document.getElementById("pantalla-destinos");
+  const pantallaPrecios = document.getElementById("pantalla-precios");
   const codigoActualEl = document.getElementById("codigo-actual");
   const estadoEl = document.getElementById("estado");
   const listaDestinosEl = document.getElementById("lista-destinos");
   const contadorEl = document.getElementById("contador");
+  const cargandoEl = document.getElementById("cargando");
+  const resultadosPreciosEl = document.getElementById("resultados-precios");
 
-  // Generar código corto tipo AB12CD
   function generarCodigo() {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let codigo = "";
@@ -140,7 +163,6 @@
     return codigo;
   }
 
-  // Crear un viaje nuevo
   async function crearViaje() {
     const codigo = generarCodigo();
     await setDoc(doc(db, "viajes", codigo), {
@@ -150,7 +172,6 @@
     entrarAlViaje(codigo);
   }
 
-  // Unirse a un viaje existente
   async function unirseAViaje(codigo) {
     codigo = codigo.trim().toUpperCase();
     if (!codigo) return;
@@ -163,28 +184,26 @@
     entrarAlViaje(codigo);
   }
 
-  // Entrar a un viaje (nuevo o existente) y escuchar cambios en tiempo real
   function entrarAlViaje(codigo) {
     codigoViaje = codigo;
     pantallaInicio.classList.add("oculto");
     pantallaApp.classList.remove("oculto");
     pantallaDestinos.classList.remove("oculto");
+    pantallaPrecios.classList.remove("oculto");
     codigoActualEl.textContent = "Código: " + codigo;
 
-    // Guardar el código en la URL para que el enlace funcione
     const url = new URL(window.location);
     url.searchParams.set("codigo", codigo);
     window.history.replaceState({}, "", url);
 
-    // Escuchar cambios en tiempo real (así ambos ven lo mismo al instante)
     const ref = doc(db, "viajes", codigo);
-    unsubscribe = onSnapshot(ref, (snap) => {
+    onSnapshot(ref, (snap) => {
       const data = snap.data();
-      renderDestinos(data?.destinos || []);
+      destinosActuales = data?.destinos || [];
+      renderDestinos(destinosActuales);
     });
   }
 
-  // Pintar la lista de destinos en pantalla
   function renderDestinos(destinos) {
     contadorEl.textContent = destinos.length;
     listaDestinosEl.innerHTML = "";
@@ -193,7 +212,7 @@
       div.className = "destino";
       div.innerHTML = `
         <div class="destino-info">
-          <b>${d.ciudad}</b>
+          <b>${d.ciudad} (${d.codigoIATA})</b>
           <span>${d.notas || ""}</span>
         </div>
         <button class="quitar" data-index="${i}">Quitar</button>
@@ -201,7 +220,6 @@
       listaDestinosEl.appendChild(div);
     });
 
-    // Botones de quitar
     document.querySelectorAll(".quitar").forEach(btn => {
       btn.addEventListener("click", async (e) => {
         const index = parseInt(e.target.dataset.index);
@@ -213,33 +231,106 @@
     });
   }
 
-  // Agregar un destino nuevo
   async function agregarDestino() {
     const ciudadEl = document.getElementById("input-ciudad");
+    const iataEl = document.getElementById("input-iata");
     const notasEl = document.getElementById("input-notas");
     const ciudad = ciudadEl.value.trim();
+    const codigoIATA = iataEl.value.trim().toUpperCase();
     const notas = notasEl.value.trim();
 
     if (!ciudad) {
       alert("Escribe una ciudad o país.");
       return;
     }
+    if (codigoIATA.length !== 3) {
+      alert("El código IATA debe tener exactamente 3 letras (ej: NRT para Tokio).");
+      return;
+    }
 
     const ref = doc(db, "viajes", codigoViaje);
     const snap = await getDoc(ref);
-    const destinosActuales = snap.data()?.destinos || [];
+    const actuales = snap.data()?.destinos || [];
 
-    if (destinosActuales.length >= 5) {
+    if (actuales.length >= 5) {
       alert("Ya tienes 5 destinos, el máximo permitido.");
       return;
     }
 
     await updateDoc(ref, {
-      destinos: arrayUnion({ ciudad, notas })
+      destinos: arrayUnion({ ciudad, codigoIATA, notas })
     });
 
     ciudadEl.value = "";
+    iataEl.value = "";
     notasEl.value = "";
+  }
+
+  // Llama a la función de Netlify para traer precios reales
+  async function buscarPrecios() {
+    if (destinosActuales.length === 0) {
+      alert("Agrega al menos un destino primero.");
+      return;
+    }
+
+    cargandoEl.classList.remove("oculto");
+    resultadosPreciosEl.innerHTML = "";
+
+    try {
+      const respuesta = await fetch("/.netlify/functions/precios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ destinos: destinosActuales })
+      });
+
+      const datos = await respuesta.json();
+
+      if (!respuesta.ok) {
+        throw new Error(datos.error || "Error desconocido");
+      }
+
+      renderResultadosPrecios(datos.resultados);
+    } catch (error) {
+      resultadosPreciosEl.innerHTML = `<p style="color:#ff3b30;">Error al buscar precios: ${error.message}</p>`;
+    } finally {
+      cargandoEl.classList.add("oculto");
+    }
+  }
+
+  function renderResultadosPrecios(resultados) {
+    // Ordenar por precio total combinado (más barato primero)
+    const conTotal = resultados.filter(r => r.totalCombinado !== null);
+    const sinTotal = resultados.filter(r => r.totalCombinado === null);
+    conTotal.sort((a, b) => a.totalCombinado - b.totalCombinado);
+    const ordenados = [...conTotal, ...sinTotal];
+
+    resultadosPreciosEl.innerHTML = "";
+
+    ordenados.forEach((r, i) => {
+      const div = document.createElement("div");
+      div.className = "resultado" + (i === 0 && r.totalCombinado !== null ? " mejor" : "");
+
+      let html = `<h3>${i === 0 && r.totalCombinado !== null ? "⭐ " : ""}${r.ciudad} (${r.codigoIATA})</h3>`;
+
+      if (r.precioDesdeMallorca) {
+        html += `<div class="precio-linea">✈️ Desde Mallorca: $${r.precioDesdeMallorca.precio} — ${r.precioDesdeMallorca.fecha}</div>`;
+      } else {
+        html += `<div class="precio-linea">✈️ Desde Mallorca: sin datos disponibles</div>`;
+      }
+
+      if (r.precioDesdeNuevaYork) {
+        html += `<div class="precio-linea">✈️ Desde Nueva York: $${r.precioDesdeNuevaYork.precio} — ${r.precioDesdeNuevaYork.fecha}</div>`;
+      } else {
+        html += `<div class="precio-linea">✈️ Desde Nueva York: sin datos disponibles</div>`;
+      }
+
+      if (r.totalCombinado !== null) {
+        html += `<div class="total">Total combinado: $${r.totalCombinado}</div>`;
+      }
+
+      div.innerHTML = html;
+      resultadosPreciosEl.appendChild(div);
+    });
   }
 
   // Eventos de botones
@@ -249,12 +340,12 @@
     unirseAViaje(codigo);
   });
   document.getElementById("btn-agregar").addEventListener("click", agregarDestino);
+  document.getElementById("btn-buscar-precios").addEventListener("click", buscarPrecios);
   document.getElementById("btn-copiar").addEventListener("click", () => {
     navigator.clipboard.writeText(window.location.href);
     estadoEl.textContent = "¡Enlace copiado! Compártelo con la otra persona.";
   });
 
-  // Si la URL ya trae un código (alguien compartió el enlace), entrar directo
   const paramsUrl = new URLSearchParams(window.location.search);
   const codigoDesdeUrl = paramsUrl.get("codigo");
   if (codigoDesdeUrl) {
