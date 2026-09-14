@@ -102,7 +102,13 @@
   <h2>Agregar destino</h2>
   <input type="text" id="input-ciudad" placeholder="Ciudad o país (ej: Tokio)">
   <input type="text" id="input-iata" placeholder="Código de aeropuerto IATA (ej: NRT)" maxlength="3">
-  <input type="text" id="input-notas" placeholder="Notas (opcional)">
+  <select id="input-temporada">
+    <option value="cualquiera">Cualquier época del año</option>
+    <option value="primavera">Primavera (Mar-May)</option>
+    <option value="verano">Verano (Jun-Ago)</option>
+    <option value="otono">Otoño (Sep-Nov)</option>
+    <option value="invierno">Invierno (Dic-Feb)</option>
+  </select>
   <button id="btn-agregar">Agregar destino</button>
 
   <h2>Destinos (<span id="contador">0</span>/5)</h2>
@@ -204,6 +210,17 @@
     });
   }
 
+  function etiquetaTemporada(temporada) {
+    const etiquetas = {
+      cualquiera: "Cualquier época",
+      primavera: "Primavera",
+      verano: "Verano",
+      otono: "Otoño",
+      invierno: "Invierno"
+    };
+    return etiquetas[temporada] || "Cualquier época";
+  }
+
   function renderDestinos(destinos) {
     contadorEl.textContent = destinos.length;
     listaDestinosEl.innerHTML = "";
@@ -213,7 +230,7 @@
       div.innerHTML = `
         <div class="destino-info">
           <b>${d.ciudad} (${d.codigoIATA})</b>
-          <span>${d.notas || ""}</span>
+          <span>${etiquetaTemporada(d.temporada)}</span>
         </div>
         <button class="quitar" data-index="${i}">Quitar</button>
       `;
@@ -234,10 +251,10 @@
   async function agregarDestino() {
     const ciudadEl = document.getElementById("input-ciudad");
     const iataEl = document.getElementById("input-iata");
-    const notasEl = document.getElementById("input-notas");
+    const temporadaEl = document.getElementById("input-temporada");
     const ciudad = ciudadEl.value.trim();
     const codigoIATA = iataEl.value.trim().toUpperCase();
-    const notas = notasEl.value.trim();
+    const temporada = temporadaEl.value;
 
     if (!ciudad) {
       alert("Escribe una ciudad o país.");
@@ -258,12 +275,12 @@
     }
 
     await updateDoc(ref, {
-      destinos: arrayUnion({ ciudad, codigoIATA, notas })
+      destinos: arrayUnion({ ciudad, codigoIATA, temporada })
     });
 
     ciudadEl.value = "";
     iataEl.value = "";
-    notasEl.value = "";
+    temporadaEl.value = "cualquiera";
   }
 
   // Llama a la función de Netlify para traer precios reales
@@ -297,39 +314,44 @@
     }
   }
 
-  function renderResultadosPrecios(resultados) {
-    // Ordenar por precio total combinado (más barato primero)
-    const conTotal = resultados.filter(r => r.totalCombinado !== null);
-    const sinTotal = resultados.filter(r => r.totalCombinado === null);
-    conTotal.sort((a, b) => a.totalCombinado - b.totalCombinado);
-    const ordenados = [...conTotal, ...sinTotal];
+  function formatearFecha(fechaISO) {
+    const f = new Date(fechaISO);
+    return f.toLocaleDateString("es-ES", { day: "numeric", month: "short", year: "numeric" });
+  }
 
+  function renderResultadosPrecios(resultados) {
     resultadosPreciosEl.innerHTML = "";
 
-    ordenados.forEach((r, i) => {
-      const div = document.createElement("div");
-      div.className = "resultado" + (i === 0 && r.totalCombinado !== null ? " mejor" : "");
+    resultados.forEach((r) => {
+      const contenedor = document.createElement("div");
+      contenedor.className = "resultado";
 
-      let html = `<h3>${i === 0 && r.totalCombinado !== null ? "⭐ " : ""}${r.ciudad} (${r.codigoIATA})</h3>`;
+      let html = `<h3>${r.ciudad} (${r.codigoIATA}) — ${etiquetaTemporada(r.temporada)}</h3>`;
 
-      if (r.precioDesdeMallorca) {
-        html += `<div class="precio-linea">✈️ Desde Mallorca: $${r.precioDesdeMallorca.precio} — ${r.precioDesdeMallorca.fecha}</div>`;
-      } else {
-        html += `<div class="precio-linea">✈️ Desde Mallorca: sin datos disponibles</div>`;
+      if (r.sinCoincidencias || r.opciones.length === 0) {
+        html += `<p style="color:#666; font-size:0.9rem;">No encontramos fechas cercanas entre Mallorca y Nueva York en esta temporada. Prueba con "Cualquier época" o revisa el código IATA.</p>`;
+        contenedor.innerHTML = html;
+        resultadosPreciosEl.appendChild(contenedor);
+        return;
       }
 
-      if (r.precioDesdeNuevaYork) {
-        html += `<div class="precio-linea">✈️ Desde Nueva York: $${r.precioDesdeNuevaYork.precio} — ${r.precioDesdeNuevaYork.fecha}</div>`;
-      } else {
-        html += `<div class="precio-linea">✈️ Desde Nueva York: sin datos disponibles</div>`;
-      }
+      r.opciones.forEach((op, i) => {
+        html += `
+          <div style="border-top: 1px solid #eee; padding-top:10px; margin-top:10px;">
+            <div class="precio-linea"><b>${i === 0 ? "⭐ Opción 1 (más barata)" : "Opción " + (i + 1)}</b></div>
+            <div class="precio-linea">✈️ Desde Mallorca: $${op.precioMallorca} — ${formatearFecha(op.fechaMallorca)}
+              <a href="${op.linkMallorca}" target="_blank">Comprar →</a>
+            </div>
+            <div class="precio-linea">✈️ Desde Nueva York: $${op.precioNuevaYork} — ${formatearFecha(op.fechaNuevaYork)}
+              <a href="${op.linkNuevaYork}" target="_blank">Comprar →</a>
+            </div>
+            <div class="total">Total combinado: $${op.total}</div>
+          </div>
+        `;
+      });
 
-      if (r.totalCombinado !== null) {
-        html += `<div class="total">Total combinado: $${r.totalCombinado}</div>`;
-      }
-
-      div.innerHTML = html;
-      resultadosPreciosEl.appendChild(div);
+      contenedor.innerHTML = html;
+      resultadosPreciosEl.appendChild(contenedor);
     });
   }
 
